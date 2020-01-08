@@ -5,12 +5,7 @@ use arrayvec::ArrayString;
 use core::{fmt, fmt::Write};
 use cortex_m_rt::ExceptionFrame;
 use cortex_m_rt::{entry, exception};
-use embedded_graphics::{
-    pixelcolor::BinaryColor,
-    prelude::*,
-    primitives::{Circle, Rectangle, Triangle},
-    text_6x8,
-};
+use embedded_graphics::{pixelcolor::BinaryColor, prelude::*, primitives::Rectangle, text_6x8};
 use embedded_hal::digital::v2::InputPin;
 use panic_semihosting as _;
 use ssd1306::prelude::*;
@@ -84,6 +79,12 @@ enum Axis {
     A,
 }
 
+#[derive(Copy, Clone, Debug)]
+enum EmergencyStop {
+    Enabled,
+    Disabled,
+}
+
 impl fmt::Display for Axis {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(
@@ -152,8 +153,15 @@ fn main() -> ! {
         a: gpioa.pa3.into_pull_up_input(&mut gpioa.crl),
     };
 
+    // EStop is always trying to pull to ground, but in normal operation will be pulled up. A short
+    // to ground (case) is more likely than short to +VE so this adds a bit more safety than pulling
+    // high on estop.
+    let estop: gpio::gpioa::PA4<gpio::Input<gpio::PullDown>> =
+        gpioa.pa4.into_pull_down_input(&mut gpioa.crl);
+
     let mut mul_buf = ArrayString::<[_; 16]>::new();
     let mut axis_buf = ArrayString::<[_; 16]>::new();
+    let mut estop_buf = ArrayString::<[_; 16]>::new();
 
     loop {
         mul_buf.clear();
@@ -184,6 +192,19 @@ fn main() -> ! {
                 fill = Some(BinaryColor::Off)
             )
             .translate(Point::new(0, 8)),
+        );
+
+        disp.draw(
+            text_6x8!(
+                if estop.is_low().unwrap() {
+                    "MACHINE ESTOP "
+                } else {
+                    "MACHINE ENABLE"
+                },
+                stroke = Some(BinaryColor::Off),
+                fill = Some(BinaryColor::On)
+            )
+            .translate(Point::new(0, 16)),
         );
 
         disp.flush().unwrap();
