@@ -5,7 +5,9 @@ use arrayvec::ArrayString;
 use core::{fmt, fmt::Write};
 use cortex_m_rt::ExceptionFrame;
 use cortex_m_rt::{entry, exception};
-use embedded_graphics::{pixelcolor::BinaryColor, prelude::*, primitives::Rectangle, text_6x8};
+use embedded_graphics::{
+    pixelcolor::BinaryColor, prelude::*, primitives::Rectangle, text_6x12, text_6x8, text_8x16,
+};
 use embedded_hal::digital::v2::InputPin;
 use panic_semihosting as _;
 use ssd1306::prelude::*;
@@ -191,7 +193,7 @@ fn main() -> ! {
             write!(mul_buf, "Mul: Off  ").unwrap();
         }
 
-        disp.draw(text_6x8!(
+        disp.draw(text_6x12!(
             &mul_buf,
             stroke = Some(BinaryColor::On),
             fill = Some(BinaryColor::Off)
@@ -204,36 +206,52 @@ fn main() -> ! {
         }
 
         disp.draw(
-            text_6x8!(
+            text_6x12!(
                 &axis_buf,
                 stroke = Some(BinaryColor::On),
                 fill = Some(BinaryColor::Off)
             )
-            .translate(Point::new(0, 8)),
-        );
-
-        disp.draw(
-            text_6x8!(
-                if estop.is_low().unwrap() {
-                    "MACHINE ESTOP "
-                } else {
-                    "MACHINE ENABLE"
-                },
-                stroke = Some(BinaryColor::Off),
-                fill = Some(BinaryColor::On)
-            )
-            .translate(Point::new(0, 16)),
+            .translate(Point::new(0, 14)),
         );
 
         write!(qei_buf, "Jog: {:05}", count).expect("Fmt jog");
 
         disp.draw(
-            text_6x8!(
+            text_6x12!(
                 &qei_buf,
                 stroke = Some(BinaryColor::On),
                 fill = Some(BinaryColor::Off)
             )
-            .translate(Point::new(0, 24)),
+            .translate(Point::new(0, 28)),
+        );
+
+        let (estop_fg, estop_bg) = if estop.is_low().unwrap() {
+            (Some(BinaryColor::Off), Some(BinaryColor::On))
+        } else {
+            (Some(BinaryColor::On), Some(BinaryColor::Off))
+        };
+
+        let estop_text = text_8x16!(
+            if estop.is_low().unwrap() {
+                "MACHINE ESTOP"
+            } else {
+                "MACHINE ENABLE"
+            },
+            stroke = estop_fg,
+            fill = estop_bg
+        );
+
+        let (w, h) = disp.get_dimensions();
+        let estop_top = h as i32 - estop_text.size().height as i32;
+
+        disp.draw(
+            Rectangle::new(Point::new(0, estop_top), Point::new(w as i32, h as i32))
+                .fill(estop_bg)
+                .into_iter()
+                .chain(estop_text.translate(Point::new(
+                    ((w as u32 / 2) - (estop_text.size().width / 2)) as i32,
+                    estop_top,
+                ))),
         );
 
         disp.flush().unwrap();
