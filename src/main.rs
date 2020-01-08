@@ -49,7 +49,53 @@ enum Multiplier {
 
 impl fmt::Display for Multiplier {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "x{}", *self as u8)
+        write!(f, "X{}", *self as u8)
+    }
+}
+
+struct AxisPins {
+    x: gpio::gpioa::PA0<gpio::Input<gpio::PullUp>>,
+    y: gpio::gpioa::PA1<gpio::Input<gpio::PullUp>>,
+    z: gpio::gpioa::PA2<gpio::Input<gpio::PullUp>>,
+    a: gpio::gpioa::PA3<gpio::Input<gpio::PullUp>>,
+}
+
+impl AxisPins {
+    pub fn axis(&self) -> Option<Axis> {
+        if self.x.is_low().unwrap() {
+            Some(Axis::X)
+        } else if self.y.is_low().unwrap() {
+            Some(Axis::Y)
+        } else if self.z.is_low().unwrap() {
+            Some(Axis::Z)
+        } else if self.a.is_low().unwrap() {
+            Some(Axis::A)
+        } else {
+            None
+        }
+    }
+}
+
+#[derive(Copy, Clone, Debug)]
+enum Axis {
+    X,
+    Y,
+    Z,
+    A,
+}
+
+impl fmt::Display for Axis {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(
+            f,
+            "{}",
+            match self {
+                Self::X => 'X',
+                Self::Y => 'Y',
+                Self::Z => 'Z',
+                Self::A => 'A',
+            }
+        )
     }
 }
 
@@ -99,15 +145,24 @@ fn main() -> ! {
         x100: gpioa.pa7.into_pull_up_input(&mut gpioa.crl),
     };
 
+    let axis_pins = AxisPins {
+        x: gpioa.pa0.into_pull_up_input(&mut gpioa.crl),
+        y: gpioa.pa1.into_pull_up_input(&mut gpioa.crl),
+        z: gpioa.pa2.into_pull_up_input(&mut gpioa.crl),
+        a: gpioa.pa3.into_pull_up_input(&mut gpioa.crl),
+    };
+
     let mut mul_buf = ArrayString::<[_; 16]>::new();
+    let mut axis_buf = ArrayString::<[_; 16]>::new();
 
     loop {
         mul_buf.clear();
+        axis_buf.clear();
 
         if let Some(mul) = mul_pins.multiplier() {
-            write!(mul_buf, "Mul: {}  ", mul).unwrap();
+            write!(mul_buf, "Mul: {}   ", mul).unwrap();
         } else {
-            write!(mul_buf, "Mul: Off ").unwrap();
+            write!(mul_buf, "Mul: Off  ").unwrap();
         }
 
         disp.draw(text_6x8!(
@@ -115,6 +170,21 @@ fn main() -> ! {
             stroke = Some(BinaryColor::On),
             fill = Some(BinaryColor::Off)
         ));
+
+        if let Some(axis) = axis_pins.axis() {
+            write!(axis_buf, "Axis: {}  ", axis).unwrap();
+        } else {
+            write!(axis_buf, "Axis: Off").unwrap();
+        }
+
+        disp.draw(
+            text_6x8!(
+                &axis_buf,
+                stroke = Some(BinaryColor::On),
+                fill = Some(BinaryColor::Off)
+            )
+            .translate(Point::new(0, 8)),
+        );
 
         disp.flush().unwrap();
     }
