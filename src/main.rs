@@ -6,17 +6,15 @@ use core::{fmt, fmt::Write};
 use cortex_m_rt::ExceptionFrame;
 use cortex_m_rt::{entry, exception};
 use embedded_graphics::{
-    pixelcolor::BinaryColor, prelude::*, primitives::Rectangle, text_6x12, text_6x8, text_8x16,
+    pixelcolor::BinaryColor, prelude::*, primitives::Rectangle, text_6x12, text_8x16,
 };
 use embedded_hal::digital::v2::InputPin;
 use panic_semihosting as _;
 use ssd1306::prelude::*;
 use ssd1306::Builder;
 use stm32f1xx_hal::{
-    delay::Delay,
     gpio,
     i2c::{BlockingI2c, DutyCycle, Mode},
-    pac,
     prelude::*,
     stm32,
     timer::Timer,
@@ -110,7 +108,6 @@ impl fmt::Display for Axis {
 #[entry]
 fn main() -> ! {
     let dp = stm32::Peripherals::take().unwrap();
-    let cp = cortex_m::Peripherals::take().unwrap();
 
     let mut flash = dp.FLASH.constrain();
     let mut rcc = dp.RCC.constrain();
@@ -178,19 +175,14 @@ fn main() -> ! {
 
     let qei = Timer::tim1(dp.TIM1, &clocks, &mut rcc.apb2).qei((c1, c2), &mut afio.mapr);
 
-    let mut count = qei.count();
-
     let mut mul_buf = ArrayString::<[_; 16]>::new();
     let mut axis_buf = ArrayString::<[_; 16]>::new();
-    let mut estop_buf = ArrayString::<[_; 16]>::new();
     let mut qei_buf = ArrayString::<[_; 32]>::new();
 
     loop {
         mul_buf.clear();
         axis_buf.clear();
         qei_buf.clear();
-
-        count = qei.count();
 
         if let Some(mul) = mul_pins.multiplier() {
             write!(mul_buf, "Mul: {}   ", mul).unwrap();
@@ -219,7 +211,7 @@ fn main() -> ! {
             .translate(Point::new(0, 14)),
         );
 
-        write!(qei_buf, "Jog: {:05}", count).expect("Fmt jog");
+        write!(qei_buf, "Jog: {:05}", qei.count()).expect("Fmt jog");
 
         disp.draw(
             text_6x12!(
