@@ -1,0 +1,22 @@
+[package]
+name = "jog-wheel-controller"
+version = "0.1.0"
+authors = ["James Waples <james@wapl.es>"]
+edition = "2018"
+
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+
+[dependencies]
+embedded-graphics = "0.6.0-alpha.2"
+ssd1306 = "0.3.0-alpha.2"
+cortex-m-rt = "0.6.11"
+panic-semihosting = "0.5.3"
+embedded-hal = "0.2.3"
+
+[dependencies.arrayvec]
+version = "0.5.1"
+default-features = false
+
+[dependencies.stm32f1xx-hal]
+version = "0.5.2"
+features = ["stm32f103"]
