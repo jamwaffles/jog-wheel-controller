@@ -10,10 +10,15 @@ use embedded_hal::digital::v2::InputPin;
 use panic_semihosting as _;
 use ssd1306::prelude::*;
 use ssd1306::Builder;
-use stm32f1xx_hal::gpio;
-use stm32f1xx_hal::i2c::{BlockingI2c, DutyCycle, Mode};
-use stm32f1xx_hal::prelude::*;
-use stm32f1xx_hal::stm32;
+use stm32f1xx_hal::{
+    delay::Delay,
+    gpio,
+    i2c::{BlockingI2c, DutyCycle, Mode},
+    pac,
+    prelude::*,
+    stm32,
+    timer::Timer,
+};
 
 struct MulPins {
     x1: gpio::gpioa::PA5<gpio::Input<gpio::PullUp>>,
@@ -103,6 +108,7 @@ impl fmt::Display for Axis {
 #[entry]
 fn main() -> ! {
     let dp = stm32::Peripherals::take().unwrap();
+    let cp = cortex_m::Peripherals::take().unwrap();
 
     let mut flash = dp.FLASH.constrain();
     let mut rcc = dp.RCC.constrain();
@@ -159,13 +165,25 @@ fn main() -> ! {
     let estop: gpio::gpioa::PA4<gpio::Input<gpio::PullDown>> =
         gpioa.pa4.into_pull_down_input(&mut gpioa.crl);
 
+    // TIM2
+    let c1 = gpioa.pa8;
+    let c2 = gpioa.pa9;
+
+    let qei = Timer::tim1(dp.TIM1, &clocks, &mut rcc.apb2).qei((c1, c2), &mut afio.mapr);
+
+    let mut count = qei.count();
+
     let mut mul_buf = ArrayString::<[_; 16]>::new();
     let mut axis_buf = ArrayString::<[_; 16]>::new();
     let mut estop_buf = ArrayString::<[_; 16]>::new();
+    let mut qei_buf = ArrayString::<[_; 32]>::new();
 
     loop {
         mul_buf.clear();
         axis_buf.clear();
+        qei_buf.clear();
+
+        count = qei.count();
 
         if let Some(mul) = mul_pins.multiplier() {
             write!(mul_buf, "Mul: {}   ", mul).unwrap();
@@ -205,6 +223,17 @@ fn main() -> ! {
                 fill = Some(BinaryColor::On)
             )
             .translate(Point::new(0, 16)),
+        );
+
+        write!(qei_buf, "Jog: {:05}", count).expect("Fmt jog");
+
+        disp.draw(
+            text_6x8!(
+                &qei_buf,
+                stroke = Some(BinaryColor::On),
+                fill = Some(BinaryColor::Off)
+            )
+            .translate(Point::new(0, 24)),
         );
 
         disp.flush().unwrap();
