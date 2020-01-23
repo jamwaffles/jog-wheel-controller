@@ -10,7 +10,10 @@ use cortex_m_semihosting::hprintln;
 use embedded_graphics::{
     egcircle, egrectangle, pixelcolor::BinaryColor, prelude::*, primitives::Rectangle, text_6x8,
 };
-use embedded_hal::digital::v2::{InputPin, ToggleableOutputPin};
+use embedded_hal::{
+    digital::v2::{InputPin, ToggleableOutputPin},
+    Direction,
+};
 use heapless::consts::*;
 use panic_semihosting as _;
 use rtfm::app;
@@ -23,8 +26,9 @@ use stm32f1xx_hal::{
     i2c::{BlockingI2c, DutyCycle, Mode},
     pac::{self, I2C2},
     prelude::*,
+    qei::{self, QeiOptions, SlaveMode},
     stm32,
-    timer::{CountDownTimer, Event, Timer},
+    timer::{self, CountDownTimer, Event, Timer},
 };
 
 type Display = ssd1306::mode::graphics::GraphicsMode<
@@ -39,6 +43,15 @@ type Display = ssd1306::mode::graphics::GraphicsMode<
     >,
 >;
 
+type Encoder = qei::Qei<
+    pac::TIM1,
+    timer::Tim1NoRemap,
+    (
+        gpio::gpioa::PA8<gpio::Input<gpio::Floating>>,
+        gpio::gpioa::PA9<gpio::Input<gpio::Floating>>,
+    ),
+>;
+
 #[app(device = stm32f1xx_hal::pac, peripherals = true, monotonic = rtfm::cyccnt::CYCCNT)]
 const APP: () = {
     struct Resources {
@@ -50,7 +63,8 @@ const APP: () = {
         multiplier_pins: MultiplierPins,
         update_period: u32,
         #[init(false)]
-        pinger_state: bool
+        pinger_state: bool,
+        qei: Encoder
         // x1: gpio::gpioa::PA5<gpio::Input<gpio::PullUp>>,
         // x10: gpio::gpioa::PA6<gpio::Input<gpio::PullUp>>,
         // x100: gpio::gpioa::PA7<gpio::Input<gpio::PullUp>>,
@@ -133,7 +147,11 @@ const APP: () = {
         let c1 = gpioa.pa8;
         let c2 = gpioa.pa9;
 
-        let qei = Timer::tim1(dp.TIM1, &clocks, &mut rcc.apb2).qei((c1, c2), &mut afio.mapr);
+        // Set QEI up for 200 PPR (2 pulses per click) with overflow to zero on full rev
+        let qei = Timer::tim1(dp.TIM1, &clocks, &mut rcc.apb2).qei((c1, c2), &mut afio.mapr, QeiOptions {
+                slave_mode: SlaveMode::EncoderMode1,
+                auto_reload_value: 199
+            });
 
         let mut inputs_timer =
             Timer::tim2(dp.TIM2, &clocks, &mut rcc.apb1).start_count_down(10.hz());
@@ -143,7 +161,7 @@ const APP: () = {
         estop.trigger_on_edge(&dp.EXTI, Edge::RISING_FALLING);
         estop.enable_interrupt(&dp.EXTI);
 
-        let update_period = 8_000_000;
+        let update_period = 4_000_000;
 
         // Schedule `update` task
         cx.schedule
@@ -161,16 +179,18 @@ const APP: () = {
             multiplier_pins,
             led,
             update_period,
+            qei
         }
     }
 
-    #[task(schedule = [update], resources = [pendant, display, update_period, pinger_state])]
+    #[task(schedule = [update], resources = [qei, pendant, display, update_period, pinger_state])]
     fn update(cx: update::Context) {
         let update::Resources {
             pendant,
             display,
             update_period,
-            pinger_state
+            pinger_state,
+            qei
         } = cx.resources;
 
         let mut line_buf: heapless::String<U21> = heapless::String::new();
@@ -197,6 +217,21 @@ const APP: () = {
 
         line_buf.clear();
         write!(line_buf, "Mul: {:?}", pendant.multiplier()).expect("Mul write");
+
+        display.draw(
+            text_6x8!(
+                &line_buf,
+                stroke = Some(BinaryColor::On),
+                fill = Some(BinaryColor::Off)
+            )
+            .translate((0, 8).into()),
+        );
+
+         line_buf.clear();
+        write!(line_buf, "QEI: {:?} {}", qei.count(), match qei.direction() {
+            Direction::Downcounting => 'V',
+            Direction::Upcounting => '^'
+        }).expect("Mul write");
 
         display.draw(
             text_6x8!(
