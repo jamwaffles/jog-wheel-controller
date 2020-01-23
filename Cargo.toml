@@ -7,17 +7,21 @@ edition = "2018"
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [dependencies]
-embedded-graphics = "0.6.0-alpha.2"
-ssd1306 = "0.3.0-alpha.2"
+embedded-graphics = "=0.6.0-alpha.2"
+# ssd1306 = "0.3.0-alpha.2"
 cortex-m-rt = "0.6.11"
 panic-semihosting = "0.5.3"
 embedded-hal = "0.2.3"
-cortex-m = "0.6.1"
+cortex-m = "0.6.2"
+cortex-m-rtfm = "0.5.1"
 
 [dependencies.arrayvec]
 version = "0.5.1"
 default-features = false
 
 [dependencies.stm32f1xx-hal]
-version = "0.5.2"
-features = ["stm32f103"]
+version = "0.5.3"
+features = ["stm32f103", "rt"]
+
+[dependencies.ssd1306]
+path = "../ssd1306"
