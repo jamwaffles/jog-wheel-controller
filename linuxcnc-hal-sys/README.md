@@ -2,7 +2,11 @@
 
 Provides **non-realtime** Rust bindings for the LinuxCNC `hal` module. Useful for writing drivers for external hardware.
 
-## Setup
+> Note: This only works on Linux (64 bit) currently
+
+## Development
+
+### Setup
 
 [`bindgen`](https://github.com/rust-lang/rust-bindgen) must be set up correctly. Follow the [requirements section of its docs](https://rust-lang.github.io/rust-bindgen/requirements.html).
 
@@ -46,3 +50,9 @@ make -j $(nproc)
 ```
 
 There are likely a bunch of unused dependencies in the above list, but LinuxCNC's `configure` script is really bad at turning features on/off, so this is the list required to just build LCNC.
+
+### Build
+
+```bash
+cargo build
+```
