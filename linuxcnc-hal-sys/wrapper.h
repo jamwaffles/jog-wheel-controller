@@ -1,1 +1,1 @@
-#include "./linuxcnc-src/src/hal/hal.h"
+#include "./linuxcnc-src/include/hal.h"
