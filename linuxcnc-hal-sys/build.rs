@@ -1,12 +1,19 @@
 extern crate bindgen;
 
 use std::env;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 fn main() {
-    // Tell cargo to tell rustc to link the system bzip2
-    // shared library.
-    // println!("cargo:rustc-link-lib=bz2");
+    let lcnc_lib_path = Path::new("linuxcnc-src/lib")
+        .canonicalize()
+        .expect("Path to LCNC lib folder is not valid");
+
+    // Link to compiled LinuxCNC `liblinuxcnc.hal.so` library
+    println!(
+        "cargo:rustc-link-search={}",
+        lcnc_lib_path.to_str().unwrap()
+    );
+    println!("cargo:rustc-link-lib=linuxcnchal");
 
     // Tell cargo to invalidate the built crate whenever the wrapper changes
     println!("cargo:rerun-if-changed=wrapper.h");
