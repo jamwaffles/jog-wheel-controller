@@ -12,23 +12,37 @@ At minimum (on Linux Mint 19.3):
 
 ```bash
 apt install \
-    libmodbus-dev \
-    libgtk2.0-dev \
-    yapps2 \
-    intltool \
-    tk-dev \
     bwidget \
-    libtk-img \
-    tclx \
-    python-tk \
+    intltool \
+    kmod \
     libboost-python-dev \
-    libxmu-dev
+    libglu-dev \
+    libgtk2.0-dev \
+    libmodbus-dev \
+    libtk-img \
+    libudev-dev \
+    libusb-1.0-0-dev \
+    libx11-dev \
+    libxinerama-dev \
+    libxmu-dev \
+    mesa-common-dev \
+    python \
+    python-tk \
+    tclx \
+    tk-dev \
+    yapps2
 
 cd linuxcnc/src
 
 ./autogen.sh
 
-./configure --with-realtime=uspace --enable-non-distributable=yes
+./configure \
+  --with-realtime=uspace \
+  --enable-non-distributable=yes \
+  --disable-userspace-pci \
+  --disable-check-runtime-deps
 
 make -j $(nproc)
 ```
+
+There are likely a bunch of unused dependencies in the above list, but LinuxCNC's `configure` script is really bad at turning features on/off, so this is the list required to just build LCNC.
