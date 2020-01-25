@@ -13,3 +13,4 @@ cargo doc --all-features
 linkchecker target/doc/firmware/index.html
 linkchecker target/doc/hal-comp/index.html
 linkchecker target/doc/linuxcnc-hal-sys/index.html
+linkchecker target/doc/linuxcnc-hal/index.html
