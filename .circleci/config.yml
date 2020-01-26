@@ -9,11 +9,10 @@ jobs:
       - run: git submodule update --init
       - restore_cache:
           key: v1-jog-wheel-controller-{{ .Environment.RUST_VERSION }}-{{ .Environment.CIRCLE_JOB }}-{{ checksum "firmware/Cargo.toml" }}-{{ checksum "hal-comp/Cargo.toml" }}-{{ checksum "linuxcnc-hal-sys/Cargo.toml" }}
-      - run: sudo apt install -qq python-pip
+      - run: sudo apt install -qq python-pip libclang-dev llvm-dev libclang-dev clang
       - run: sudo pip install linkchecker
       - run: rustup default ${RUST_VERSION:-stable}
       - run: rustup component add rustfmt
-      - run: ./setup.sh
       - run: ./build.sh
       - save_cache:
           key: v1-jog-wheel-controller-{{ .Environment.RUST_VERSION }}-{{ .Environment.CIRCLE_JOB }}-{{ checksum "firmware/Cargo.toml" }}-{{ checksum "hal-comp/Cargo.toml" }}-{{ checksum "linuxcnc-hal-sys/Cargo.toml" }}
