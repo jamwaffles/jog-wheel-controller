@@ -1,261 +1,316 @@
 #![no_std]
 #![no_main]
 
-use arrayvec::ArrayString;
-use core::{fmt, fmt::Write};
-use cortex_m_rt::ExceptionFrame;
-use cortex_m_rt::{entry, exception};
+mod multiplier;
+mod pendant;
+
+use crate::{multiplier::MultiplierPins, pendant::Pendant};
+use core::fmt::Write;
+use cortex_m_semihosting::hprintln;
 use embedded_graphics::{
-    pixelcolor::BinaryColor, prelude::*, primitives::Rectangle, text_6x12, text_8x16,
+    egcircle, egrectangle, pixelcolor::BinaryColor, prelude::*, primitives::Rectangle, text_6x8,
 };
-use embedded_hal::digital::v2::InputPin;
+use embedded_hal::{
+    digital::v2::{InputPin, ToggleableOutputPin},
+    Direction,
+};
+use heapless::consts::*;
 use panic_semihosting as _;
+use rtfm::app;
+use rtfm::cyccnt::{Duration, Instant, U32Ext};
 use ssd1306::prelude::*;
 use ssd1306::Builder;
 use stm32f1xx_hal::{
-    gpio,
+    device, gpio,
+    gpio::{gpioc::PC13, Edge, ExtiPin, Output, PullDown, PushPull, State},
     i2c::{BlockingI2c, DutyCycle, Mode},
+    pac::{self, I2C2},
     prelude::*,
+    qei::{self, QeiOptions, SlaveMode},
     stm32,
-    timer::Timer,
+    timer::{self, CountDownTimer, Event, Timer},
 };
 
-struct MulPins {
-    x1: gpio::gpioa::PA5<gpio::Input<gpio::PullUp>>,
-    x10: gpio::gpioa::PA6<gpio::Input<gpio::PullUp>>,
-    x100: gpio::gpioa::PA7<gpio::Input<gpio::PullUp>>,
-}
+type Display = ssd1306::mode::graphics::GraphicsMode<
+    ssd1306::interface::i2c::I2cInterface<
+        stm32f1xx_hal::i2c::BlockingI2c<
+            I2C2,
+            (
+                gpio::gpiob::PB10<gpio::Alternate<gpio::OpenDrain>>,
+                gpio::gpiob::PB11<gpio::Alternate<gpio::OpenDrain>>,
+            ),
+        >,
+    >,
+>;
 
-impl MulPins {
-    pub fn multiplier(&self) -> Option<Multiplier> {
-        if self.x1.is_low().unwrap() {
-            Some(Multiplier::X1)
-        } else if self.x10.is_low().unwrap() {
-            Some(Multiplier::X10)
-        } else if self.x100.is_low().unwrap() {
-            Some(Multiplier::X100)
-        } else {
-            None
-        }
+type Encoder = qei::Qei<
+    pac::TIM1,
+    timer::Tim1NoRemap,
+    (
+        gpio::gpioa::PA8<gpio::Input<gpio::Floating>>,
+        gpio::gpioa::PA9<gpio::Input<gpio::Floating>>,
+    ),
+>;
+
+#[app(device = stm32f1xx_hal::pac, peripherals = true, monotonic = rtfm::cyccnt::CYCCNT)]
+const APP: () = {
+    struct Resources {
+        led: PC13<Output<PushPull>>,
+        display: Display,
+        jog_velocity_timer: CountDownTimer<pac::TIM2>,
+        estop: gpio::gpioa::PA4<gpio::Input<gpio::PullDown>>,
+        pendant: Pendant,
+        multiplier_pins: MultiplierPins,
+        update_period: Duration,
+        #[init(false)]
+        pinger_state: bool,
+        qei: Encoder,
+        prev_qei_sample_time: Instant,
+        #[init(0)]
+        test_delta: i32,
+        #[init(0)]
+        prev_qei_count: u16,
+        // x1: gpio::gpioa::PA5<gpio::Input<gpio::PullUp>>,
+        // x10: gpio::gpioa::PA6<gpio::Input<gpio::PullUp>>,
+        // x100: gpio::gpioa::PA7<gpio::Input<gpio::PullUp>>,
     }
-}
 
-#[derive(Copy, Clone, Debug)]
-enum Multiplier {
-    X1 = 1,
-    X10 = 10,
-    X100 = 100,
-}
+    #[init(schedule = [update])]
+    fn init(mut cx: init::Context) -> init::LateResources {
+        let dp = cx.device;
 
-impl fmt::Display for Multiplier {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "X{}", *self as u8)
-    }
-}
+        // Enable cycle counter
+        let mut core = cx.core;
+        core.DWT.enable_cycle_counter();
 
-struct AxisPins {
-    x: gpio::gpioa::PA0<gpio::Input<gpio::PullUp>>,
-    y: gpio::gpioa::PA1<gpio::Input<gpio::PullUp>>,
-    z: gpio::gpioa::PA2<gpio::Input<gpio::PullUp>>,
-    a: gpio::gpioa::PA3<gpio::Input<gpio::PullUp>>,
-}
+        let mut flash = dp.FLASH.constrain();
+        let mut rcc = dp.RCC.constrain();
 
-impl AxisPins {
-    pub fn axis(&self) -> Option<Axis> {
-        if self.x.is_low().unwrap() {
-            Some(Axis::X)
-        } else if self.y.is_low().unwrap() {
-            Some(Axis::Y)
-        } else if self.z.is_low().unwrap() {
-            Some(Axis::Z)
-        } else if self.a.is_low().unwrap() {
-            Some(Axis::A)
-        } else {
-            None
-        }
-    }
-}
+        let clocks = rcc
+            .cfgr
+            .use_hse(8.mhz())
+            .sysclk(72.mhz())
+            .pclk1(36.mhz())
+            .freeze(&mut flash.acr);
 
-#[derive(Copy, Clone, Debug)]
-enum Axis {
-    X,
-    Y,
-    Z,
-    A,
-}
+        let mut afio = dp.AFIO.constrain(&mut rcc.apb2);
 
-#[derive(Copy, Clone, Debug)]
-enum EmergencyStop {
-    Enabled,
-    Disabled,
-}
+        let mut gpioc = dp.GPIOC.split(&mut rcc.apb2);
+        let mut gpiob = dp.GPIOB.split(&mut rcc.apb2);
+        let mut gpioa = dp.GPIOA.split(&mut rcc.apb2);
 
-impl fmt::Display for Axis {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(
-            f,
-            "{}",
-            match self {
-                Self::X => 'X',
-                Self::Y => 'Y',
-                Self::Z => 'Z',
-                Self::A => 'A',
-            }
-        )
-    }
-}
+        let led = gpioc
+            .pc13
+            .into_push_pull_output_with_state(&mut gpioc.crh, State::High);
 
-#[entry]
-fn main() -> ! {
-    let dp = stm32::Peripherals::take().unwrap();
+        let scl = gpiob.pb10.into_alternate_open_drain(&mut gpiob.crh);
+        let sda = gpiob.pb11.into_alternate_open_drain(&mut gpiob.crh);
 
-    let mut flash = dp.FLASH.constrain();
-    let mut rcc = dp.RCC.constrain();
+        let i2c = BlockingI2c::i2c2(
+            dp.I2C2,
+            (scl, sda),
+            Mode::Fast {
+                frequency: 100_000.hz(),
+                duty_cycle: DutyCycle::Ratio2to1,
+            },
+            clocks,
+            &mut rcc.apb1,
+            1000,
+            10,
+            1000,
+            1000,
+        );
 
-    let clocks = rcc
-        .cfgr
-        .use_hse(8.mhz())
-        .sysclk(72.mhz())
-        .pclk1(36.mhz())
-        .freeze(&mut flash.acr);
+        let mut disp: GraphicsMode<_> = Builder::new()
+            .with_rotation(DisplayRotation::Rotate180)
+            .connect_i2c(i2c)
+            .into();
 
-    let mut afio = dp.AFIO.constrain(&mut rcc.apb2);
+        disp.init().unwrap();
 
-    let mut gpiob = dp.GPIOB.split(&mut rcc.apb2);
-    let mut gpioa = dp.GPIOA.split(&mut rcc.apb2);
-
-    let scl = gpiob.pb10.into_alternate_open_drain(&mut gpiob.crh);
-    let sda = gpiob.pb11.into_alternate_open_drain(&mut gpiob.crh);
-
-    let i2c = BlockingI2c::i2c2(
-        dp.I2C2,
-        (scl, sda),
-        Mode::Fast {
-            frequency: 400_000.hz(),
-            duty_cycle: DutyCycle::Ratio2to1,
-        },
-        clocks,
-        &mut rcc.apb1,
-        1000,
-        10,
-        1000,
-        1000,
-    );
-
-    let mut disp: GraphicsMode<_> = Builder::new()
-        .with_rotation(DisplayRotation::Rotate180)
-        .connect_i2c(i2c)
-        .into();
-
-    disp.init().unwrap();
-    disp.flush().unwrap();
-
-    let mul_pins = MulPins {
-        x1: gpioa.pa5.into_pull_up_input(&mut gpioa.crl),
-        x10: gpioa.pa6.into_pull_up_input(&mut gpioa.crl),
-        x100: gpioa.pa7.into_pull_up_input(&mut gpioa.crl),
-    };
-
-    let axis_pins = AxisPins {
-        x: gpioa.pa0.into_pull_up_input(&mut gpioa.crl),
-        y: gpioa.pa1.into_pull_up_input(&mut gpioa.crl),
-        z: gpioa.pa2.into_pull_up_input(&mut gpioa.crl),
-        a: gpioa.pa3.into_pull_up_input(&mut gpioa.crl),
-    };
-
-    // EStop is always trying to pull to ground, but in normal operation will be pulled up. A short
-    // to ground (case) is more likely than short to +VE so this adds a bit more safety than pulling
-    // high on estop.
-    let estop: gpio::gpioa::PA4<gpio::Input<gpio::PullDown>> =
-        gpioa.pa4.into_pull_down_input(&mut gpioa.crl);
-
-    // TIM2
-    let c1 = gpioa.pa8;
-    let c2 = gpioa.pa9;
-
-    let qei = Timer::tim1(dp.TIM1, &clocks, &mut rcc.apb2).qei((c1, c2), &mut afio.mapr);
-
-    let mut mul_buf = ArrayString::<[_; 16]>::new();
-    let mut axis_buf = ArrayString::<[_; 16]>::new();
-    let mut qei_buf = ArrayString::<[_; 32]>::new();
-
-    loop {
-        mul_buf.clear();
-        axis_buf.clear();
-        qei_buf.clear();
-
-        if let Some(mul) = mul_pins.multiplier() {
-            write!(mul_buf, "Mul: {}   ", mul).unwrap();
-        } else {
-            write!(mul_buf, "Mul: Off  ").unwrap();
-        }
-
-        disp.draw(text_6x12!(
-            &mul_buf,
+        disp.draw(text_6x8!(
+            "Initialising...",
             stroke = Some(BinaryColor::On),
             fill = Some(BinaryColor::Off)
         ));
 
-        if let Some(axis) = axis_pins.axis() {
-            write!(axis_buf, "Axis: {}  ", axis).unwrap();
-        } else {
-            write!(axis_buf, "Axis: Off").unwrap();
-        }
-
-        disp.draw(
-            text_6x12!(
-                &axis_buf,
-                stroke = Some(BinaryColor::On),
-                fill = Some(BinaryColor::Off)
-            )
-            .translate(Point::new(0, 14)),
-        );
-
-        write!(qei_buf, "Jog: {:05}", qei.count()).expect("Fmt jog");
-
-        disp.draw(
-            text_6x12!(
-                &qei_buf,
-                stroke = Some(BinaryColor::On),
-                fill = Some(BinaryColor::Off)
-            )
-            .translate(Point::new(0, 28)),
-        );
-
-        let (estop_fg, estop_bg) = if estop.is_low().unwrap() {
-            (Some(BinaryColor::Off), Some(BinaryColor::On))
-        } else {
-            (Some(BinaryColor::On), Some(BinaryColor::Off))
-        };
-
-        let estop_text = text_8x16!(
-            if estop.is_low().unwrap() {
-                "MACHINE ESTOP"
-            } else {
-                "MACHINE ENABLE"
-            },
-            stroke = estop_fg,
-            fill = estop_bg
-        );
-
-        let (w, h) = disp.get_dimensions();
-        let estop_top = h as i32 - estop_text.size().height as i32;
-
-        disp.draw(
-            Rectangle::new(Point::new(0, estop_top), Point::new(w as i32, h as i32))
-                .fill(estop_bg)
-                .into_iter()
-                .chain(estop_text.translate(Point::new(
-                    ((w as u32 / 2) - (estop_text.size().width / 2)) as i32,
-                    estop_top,
-                ))),
-        );
-
         disp.flush().unwrap();
-    }
-}
 
-#[exception]
-fn HardFault(ef: &ExceptionFrame) -> ! {
-    panic!("{:#?}", ef);
-}
+        let mut x1 = gpioa.pa5.into_pull_up_input(&mut gpioa.crl);
+        let mut x10 = gpioa.pa6.into_pull_up_input(&mut gpioa.crl);
+        let mut x100 = gpioa.pa7.into_pull_up_input(&mut gpioa.crl);
+
+        let multiplier_pins = MultiplierPins::new(x1, x10, x100);
+
+        let mut estop = gpioa.pa4.into_pull_down_input(&mut gpioa.crl);
+
+        // estop.make_interrupt_source(&mut afio);
+        // estop.trigger_on_edge(&dp.EXTI, Edge::RISING);
+        // estop.enable_interrupt(&dp.EXTI);
+
+        // TIM1 QEI
+        let c1 = gpioa.pa8;
+        let c2 = gpioa.pa9;
+
+        // Set QEI up for 400 PPR (4 pulses per click) with overflow to zero on full rev
+        let qei = Timer::tim1(dp.TIM1, &clocks, &mut rcc.apb2).qei(
+            (c1, c2),
+            &mut afio.mapr,
+            QeiOptions {
+                slave_mode: SlaveMode::EncoderMode3,
+                auto_reload_value: u16::max_value(),
+            },
+        );
+
+        let mut jog_velocity_timer =
+            Timer::tim2(dp.TIM2, &clocks, &mut rcc.apb1).start_count_down(10.hz());
+        jog_velocity_timer.listen(Event::Update);
+
+        // estop.make_interrupt_source(&mut afio);
+        // estop.trigger_on_edge(&dp.EXTI, Edge::RISING_FALLING);
+        // estop.enable_interrupt(&dp.EXTI);
+
+        let update_period = Duration::from_cycles(clocks.sysclk().0 / 2.hz().0);
+
+        // Schedule `update` task
+        cx.schedule.update(cx.start + update_period).unwrap();
+
+        hprintln!("Init complete").unwrap();
+
+        // Init the static resources to use them later through RTFM
+        init::LateResources {
+            display: disp,
+            estop,
+            jog_velocity_timer,
+            pendant: Pendant::new(),
+            multiplier_pins,
+            led,
+            update_period,
+            qei,
+            prev_qei_sample_time: cx.start,
+        }
+    }
+
+    #[task(schedule = [update], resources = [test_delta, qei, pendant, display, update_period, pinger_state])]
+    fn update(cx: update::Context) {
+        // hprintln!("Display update").unwrap();
+
+        let update::Resources {
+            pendant,
+            display,
+            update_period,
+            pinger_state,
+            qei,
+            test_delta,
+        } = cx.resources;
+
+        let mut line_buf: heapless::String<U21> = heapless::String::new();
+
+        display.clear();
+
+        // // Pinger
+        // display.draw(egcircle!(
+        //     (127 - 5, 5),
+        //     5,
+        //     stroke = Some(BinaryColor::On),
+        //     fill = if *pinger_state {
+        //         Some(BinaryColor::On)
+        //     } else {
+        //         Some(BinaryColor::Off)
+        //     }
+        // ));
+
+        // *pinger_state = !*pinger_state;
+
+        write!(line_buf, "Estop: {:?}", pendant.estopped()).expect("Estop write");
+
+        display.draw(text_6x8!(
+            &line_buf,
+            stroke = Some(BinaryColor::On),
+            fill = Some(BinaryColor::Off)
+        ));
+
+        line_buf.clear();
+        write!(line_buf, "Mul: {:?}", pendant.multiplier()).expect("Mul write");
+
+        display.draw(
+            text_6x8!(
+                &line_buf,
+                stroke = Some(BinaryColor::On),
+                fill = Some(BinaryColor::Off)
+            )
+            .translate((0, 8).into()),
+        );
+
+        line_buf.clear();
+        write!(
+            line_buf,
+            "QEI: {:?} {} ({})",
+            qei.count(),
+            match qei.direction() {
+                Direction::Downcounting => '-',
+                Direction::Upcounting => '+',
+            },
+            test_delta
+        )
+        .expect("QEI write");
+
+        display.draw(
+            text_6x8!(
+                &line_buf,
+                stroke = Some(BinaryColor::On),
+                fill = Some(BinaryColor::Off)
+            )
+            .translate((0, 16).into()),
+        );
+
+        display.flush().unwrap();
+
+        cx.schedule.update(cx.scheduled + *update_period).unwrap();
+    }
+
+    #[task(binds = TIM2, resources = [qei, test_delta, prev_qei_count, prev_qei_sample_time, led, pinger_state, display, pendant, estop, multiplier_pins, jog_velocity_timer])]
+    fn jog_velocity(cx: jog_velocity::Context) {
+        // cx.resources
+        //     .pendant
+        //     .set_multiplier(cx.resources.multiplier_pins.selection());
+
+        // *cx.resources.pinger_state = !*cx.resources.pinger_state;
+
+        let time_delta = 72_000_000 / cx.resources.prev_qei_sample_time.elapsed().as_cycles();
+        let prev_count = *cx.resources.prev_qei_count;
+        let count_delta = cx.resources.qei.count() - prev_count;
+
+        // hprintln!("Jog {} {}", time_delta, count_delta).unwrap();
+
+        *cx.resources.prev_qei_sample_time = cx.start;
+        *cx.resources.test_delta = count_delta as i32 / time_delta as i32;
+
+        cx.resources.led.toggle().unwrap();
+
+        *cx.resources.prev_qei_count = cx.resources.qei.count();
+
+        // Clears the update flag
+        cx.resources
+            .jog_velocity_timer
+            .clear_update_interrupt_flag();
+    }
+
+    // #[task(binds = EXTI4, resources = [pendant, estop])]
+    // fn estop(cx: estop::Context) {
+    //     if cx.resources.estop.check_interrupt() {
+    //         if cx.resources.estop.is_low().expect("Estop pin") {
+    //             cx.resources.pendant.set_estop();
+    //         } else {
+    //             cx.resources.pendant.clear_estop();
+    //         }
+
+    //         // if we don't clear this bit, the ISR would trigger indefinitely
+    //         cx.resources.estop.clear_interrupt_pending_bit();
+    //     }
+    // }
+
+    extern "C" {
+        fn EXTI0();
+    }
+};
