@@ -23,7 +23,8 @@ version = "0.5.1"
 default-features = false
 
 [dependencies.stm32f1xx-hal]
-git = "https://github.com/stm32-rs/stm32f1xx-hal"
+# git = "https://github.com/stm32-rs/stm32f1xx-hal"
+version = "0.5.3"
 features = ["stm32f103", "rt"]
 
 [profile.dev]

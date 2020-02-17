@@ -1,2 +1,6 @@
-# loadusr -W /home/james/Repositories/jog-wheel-controller/target/debug/hal-comp
-loadusr -W /home/james/Repositories/linuxcnc-hal-rs/target/debug/examples/empty
+# loadusr -Wn rust-comp /home/james/Repositories/linuxcnc-hal-rs/target/debug/examples/pins
+loadusr -Wn rust-comp /home/james/Repositories/linuxcnc-hal-rs/target/debug/examples/struct
+# loadusr -Wn rust-comp /home/james/Repositories/linuxcnc-hal-rs/target/debug/examples/empty
+net output-1 rust-comp.output-1
+net input-1 motion.spindle-speed-out rust-comp.input-1
+# net input-2 motion.spindle-speed-in struct.input-2
